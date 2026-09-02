@@ -1,0 +1,69 @@
+name: CI
+
+# Every pull request, and every push to main.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Same version as the Dockerfile and the local conda env. Dev/CI/prod
+          # drift is its own bug source, and config.py needs tomllib (3.11+).
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Test
+        # No API key, no network, no cost: every test injects MockLLMClient.
+        #
+        # Integration tests against a real provider are deliberately NOT here.
+        # In one afternoon of building this, Hugging Face exhausted its quota,
+        # Gemini returned 503s for twenty minutes, and a pinned model was
+        # retired with a 404. A CI job that calls a real provider goes red for
+        # reasons that have nothing to do with the change under review, and a
+        # gate that cries wolf is a gate people learn to ignore. Real-provider
+        # checks belong on a schedule or a manual trigger, not on every PR.
+        run: pytest -v
+
+  build:
+    # Only worth building if the tests passed.
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        # Tag with the commit SHA, not just `latest`, so a running container can
+        # be traced back to exact source. `latest` alone is untraceable.
+        run: docker build -t ticket-agent:${{ github.sha }} .
+
+      - name: Smoke test the image
+        # "It builds" is a weaker claim than "it runs". This catches a broken
+        # ENTRYPOINT, a missing config.toml, or a file the non-root user cannot
+        # read — none of which a successful build would reveal.
+        # --mock: no API key, no network, no cost.
+        run: |
+          docker run --rm -v "$PWD/samples:/data:ro" \
+            ticket-agent:${{ github.sha }} --file /data/ticket_02.txt --mock
+
+      # A real pipeline would push from here, authenticating to a registry with
+      # credentials from the repository secret store, and only on main:
+      #
+      # - name: Log in to registry
+      #   if: github.ref == 'refs/heads/main'
+      #   run: echo "${{ secrets.REGISTRY_TOKEN }}" | docker login ...
+      # - name: Push
+      #   if: github.ref == 'refs/heads/main'
+      #   run: docker push ticket-agent:${{ github.sha }}

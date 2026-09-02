@@ -1,0 +1,19 @@
+# Runtime dependencies, PINNED EXACTLY.
+#
+# This is an application shipped as a container image, not a library. The rule
+# differs between the two: a library declares ranges so it can coexist with
+# whatever its consumer already has, while an application pins so that the
+# image built today and the image rebuilt in six months contain the same code.
+# Unpinned, `docker build` is a different program every time you run it, and a
+# regression traced to a dependency release has nothing in git to point at.
+#
+# Same argument this repo already makes for model ids in config.toml: an alias
+# changes what you call with nothing in the history to explain why the results
+# moved. Dependencies are the same problem one layer down.
+#
+# To update: bump a pin deliberately, run the tests, commit the bump on its own
+# so `git bisect` can find it later.
+google-genai==2.20.0
+python-dotenv==1.2.3
+huggingface_hub==1.28.0
+openai==3.5.0

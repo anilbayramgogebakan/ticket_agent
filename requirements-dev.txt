@@ -1,0 +1,9 @@
+-r requirements.txt
+
+# Pinned for the same reason as the runtime deps, and the linter especially:
+# ruff ships new rules in minor releases, so an unpinned ruff turns CI red on a
+# branch that changed nothing. A gate that fails for reasons unrelated to the
+# change under review is a gate people learn to ignore — the same argument this
+# repo's CI file makes for keeping real provider calls out of the PR job.
+pytest==9.1.1
+ruff==0.16.4

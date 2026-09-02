@@ -1,0 +1,130 @@
+# Project configuration — COMMITTED TO GIT, on purpose.
+#
+# Everything here changes what the agent produces, so every change should be a
+# reviewable commit you can `git blame` later. That is exactly why it does not
+# live in .env: an untracked file cannot explain why last month's results stopped
+# reproducing.
+#
+# Secrets are the opposite and belong in .env, which is gitignored. Nothing in
+# this file is sensitive; nothing sensitive may be added to it.
+#
+# Precedence, highest first:
+#   1. CLI flag        --model, --provider     one-off experiment
+#   2. environment     HF_MODEL, GEMINI_MODEL  temporary session override
+#   3. this file                               what the project actually uses
+#   4. code default                            last resort if this file is gone
+
+# Which backend is used when --provider is not given.
+provider = "ollama"
+
+[gemini]
+# Pin an explicit version, never a moving alias like "gemini-flash-latest".
+# An alias changes what you call with nothing in git to explain why results
+# shifted. The cost of pinning is that models get retired — which argues for an
+# integration test that really calls the model, not for the alias.
+model = "gemini-3.5-flash-lite"
+
+# Google's structured-output mode. Constrains syntax only, never meaning: the
+# validator still has to catch invented enum values and missing keys.
+json_mode = true
+
+[hf]
+# Small on purpose, but not too small. Below ~1.5B a model cannot call tools
+# at all, and Qwen2.5-0.5B returned the same invalid enum three times running
+# when told the allowed values verbatim. The agent corrects slips, not
+# capability gaps.
+model = "Qwen/Qwen2.5-1.5B-Instruct"
+# model = "Qwen/Qwen2.5-0.5B-Instruct"
+
+# HF routes to third-party backends and does NOT serve chat models itself; its
+# own "hf-inference" handles encoders only. Pin the route: auto-routing has
+# failed even when the provider was enabled and served the model, and the same
+# weights on a different backend can produce different output.
+provider = "featherless-ai"
+
+# Off by default — structured-output support varies by routed backend, and we
+# measured that the prompt alone produces clean JSON without it.
+json_mode = false
+
+[agent]
+# Upper bound on generated tokens per call. Sized to the task, not to the
+# model's capability: a valid extraction is ~90 tokens and `summary` is capped
+# at 200 characters, so 300 is generous.
+#
+# This is a LATENCY and COST guard, not just a safety limit. A degenerate model
+# does not stop — smollm2:135m emitted exactly 1024 tokens (the old cap) on
+# every call, turning a 6-second request into 24 seconds and one 6-ticket batch
+# into 7 minutes. Sizing the cap to the task bounds the damage a bad model can
+# do to your wall-clock time and your bill.
+max_tokens = 300
+
+# Budget for one whole run: the initial extraction plus every tool call the
+# model makes. An agent choosing its own actions can loop far more inventively
+# than a fixed retry count, so this is the only thing guaranteeing termination.
+# A non-converging ticket is the most expensive kind: every step is a full
+# round-trip and it still returns nothing.
+max_steps = 8
+
+[transport]
+# Retries for TRANSIENT failures only (429/500/502/503/504) — a different
+# mechanism from the agent's own steps. A 503 must not consume a step.
+# Sized for batch work; lower it for interactive use, where four slow failures
+# are worse than one fast one.
+max_retries = 4
+timeout_seconds = 60
+
+# --- OpenAI-compatible providers -----------------------------------------
+# These all speak the same chat-completions protocol, so they share one client
+# class. Adding another (Together, Fireworks, OpenRouter, a local vLLM) means
+# adding a block here — no new code.
+#
+# api_key_env names the SECRET's variable; the secret itself lives in .env.
+
+[groq]
+# Groq — LPU inference for open-weight models, generous free tier.
+# Note: Groq (groq.com) is a different company from Grok/xAI (x.ai). Keys: gsk_
+base_url = "https://api.groq.com/openai/v1"
+api_key_env = "GROQ_API_KEY"
+# Verified present in the catalogue on 2026-08-28. Groq's list is short and
+# changes; `curl https://api.groq.com/openai/v1/models` is the authority.
+#
+# NOT qwen/qwen3.6-27b: it is a REASONING model and wraps its answer in a
+# <think>...</think> block, so the response does not start with '{' and
+# json.loads fails at char 0 — 0/6 tickets validated even though the model's
+# reasoning contained the correct answer every time. That is a gap in our
+# validator (_extract_json_block only strips full-string markdown fences), not
+# a model defect. Fixing it means deciding how leniently to hunt for JSON
+# inside surrounding prose; until then, prefer a non-reasoning model here.
+# Reasoning models are also poor value for extraction: that run burned 1,687
+# completion tokens per ticket on thinking we then discarded.
+model = "openai/gpt-oss-20b"
+json_mode = false
+
+# gpt-oss is a REASONING model: it spends tokens thinking before it answers,
+# and Groq returns that thinking in a separate `reasoning` field. The global
+# max_tokens of 300 — sized to the ~90-token answer — left it 2 tokens to
+# answer with after 298 of reasoning, so `content` came back EMPTY and the
+# extraction "failed" with nothing wrong at all.
+#
+# A token budget must cover thinking + answering, not just answering.
+max_tokens = 2000
+
+[ollama]
+# Locally hosted, via Ollama's OpenAI-compatible endpoint. No api_key_env
+# because there is no credential: a local server needs none, and inventing a
+# fake secret to store in .env would make it look like a real one.
+#
+# Needs the daemon running:  brew services start ollama
+# and the model pulled:      ollama pull qwen2.5:0.5b
+#
+# Free and unlimited, which is the whole point — no quota can take it away.
+# Expect failures: 0.5B cannot reliably hold a 7-field schema, and that is
+# exactly what makes it useful for watching the agent reach for its tools.
+base_url = "http://localhost:11434/v1"
+model = "qwen2.5:0.5b"
+json_mode = false
+
+# Tight on purpose: these are small non-reasoning models, and a degenerate one
+# does not stop on its own. smollm2:135m emitted the full cap on every call,
+# turning a 6-second request into 24 seconds.
+max_tokens = 300

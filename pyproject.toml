@@ -1,0 +1,33 @@
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
+[tool.ruff]
+# Stated explicitly rather than left to the tool's defaults, so `ruff check .`
+# means the same thing here, in CI, and in whatever editor plugin someone has
+# installed. Without this the repo carried `# noqa: BLE001` comments for a rule
+# that was never enabled — decoration that reads like a decision.
+target-version = "py312"
+
+[tool.ruff.lint]
+# Beyond the default (E4/E7/E9 + F), each of these has earned its place here by
+# catching something real during this project:
+#   I    import order         churn in diffs when two files disagree
+#   B    bugbear              mutable default args, loop-variable capture
+#   UP   pyupgrade            syntax kept from older Python for no reason
+#   SIM  simplify             try/except/pass and friends
+#   BLE  blind-except         `except Exception` needs a reason, in a comment
+#   RUF  ruff's own           unused noqa, among others
+#
+# Deliberately NOT S (bandit): it flags every `assert` in the test suite, which
+# is 190 findings that are all correct usage. A linter that is mostly noise is
+# one people start passing --no-verify to.
+select = ["E", "F", "I", "B", "UP", "SIM", "BLE", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# agent.py holds the PROMPT TEXT. A `# noqa` cannot help inside a triple-quoted
+# string — it would be part of the prompt, not a comment — and reflowing a
+# prompt to fit 88 columns changes the bytes sent to the model, which can change
+# what the model returns and would need a PROMPT_VERSION bump. A formatting rule
+# must never be allowed to quietly alter behaviour, so the rule yields here
+# rather than the prompt.
+"ticket_agent/agent.py" = ["E501"]
