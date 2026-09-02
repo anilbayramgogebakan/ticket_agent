@@ -1,6 +1,6 @@
 # ticket_agent
 
-An LLM agent that turns unstructured support tickets into validated JSON.
+An LLM agent that turns unstructured support tickets into validated JSON. I added CI/CD workflow.
 
 ```
 "my fibre has been dead since Tuesday, call me on 06 1234567"
