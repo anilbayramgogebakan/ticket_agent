@@ -41,13 +41,33 @@ jobs:
     # Only worth building if the tests passed.
     needs: test
     runs-on: ubuntu-latest
+
+    # The automatic token every run is issued starts READ-ONLY. Publishing a
+    # package needs this one extra permission, granted here and nowhere else.
+    # It still cannot touch anything but packages belonging to this repository,
+    # and it expires when the job ends.
+    permissions:
+      contents: read
+      packages: write
+
+    # The image name, written once. github.repository is already "owner/repo",
+    # exactly the shape ghcr.io expects. Image names must be lowercase — a repo
+    # with a capital letter in its name would need lowercasing here.
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+
     steps:
       - uses: actions/checkout@v4
 
       - name: Build image
-        # Tag with the commit SHA, not just `latest`, so a running container can
-        # be traced back to exact source. `latest` alone is untraceable.
-        run: docker build -t ticket-agent:${{ github.sha }} .
+        # Tagged with the commit SHA, not just `latest`, so a running container
+        # can be traced back to exact source. `latest` alone is untraceable.
+        #
+        # Tagged with its FINAL registry name from the start, so the image the
+        # smoke test below exercises is byte-for-byte the image that gets
+        # pushed. A pipeline that rebuilds before publishing can ship an image
+        # no test ever saw.
+        run: docker build -t $IMAGE:${{ github.sha }} .
 
       - name: Smoke test the image
         # "It builds" is a weaker claim than "it runs". This catches a broken
@@ -56,14 +76,34 @@ jobs:
         # --mock: no API key, no network, no cost.
         run: |
           docker run --rm -v "$PWD/samples:/data:ro" \
-            ticket-agent:${{ github.sha }} --file /data/ticket_02.txt --mock
+            $IMAGE:${{ github.sha }} --file /data/ticket_02.txt --mock
 
-      # A real pipeline would push from here, authenticating to a registry with
-      # credentials from the repository secret store, and only on main:
+      # Everything below runs ONLY on main, and this is where CI ends and CD
+      # begins. A pull request must be able to build and test an image; it must
+      # never be able to publish one under this account — including a PR from a
+      # fork, opened by someone you have never met.
       #
-      # - name: Log in to registry
-      #   if: github.ref == 'refs/heads/main'
-      #   run: echo "${{ secrets.REGISTRY_TOKEN }}" | docker login ...
-      # - name: Push
-      #   if: github.ref == 'refs/heads/main'
-      #   run: docker push ticket-agent:${{ github.sha }}
+      # Note the ORDER too: the push sits downstream of the smoke test, so a
+      # broken image cannot reach the registry. Publish-then-verify would leave
+      # a broken image sitting there for someone to pull.
+      - name: Log in to ghcr.io
+        if: github.ref == 'refs/heads/main'
+        # No repository secret to create, store or rotate: GitHub issues this
+        # token automatically for every run. That is the practical reason to
+        # prefer ghcr.io over an external registry while learning.
+        run: echo "${{ github.token }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Push
+        if: github.ref == 'refs/heads/main'
+        run: docker push $IMAGE:${{ github.sha }}
+
+      - name: Verify the published image
+        if: github.ref == 'refs/heads/main'
+        # Removing the local tag forces the run below to pull from ghcr.io.
+        # This is the only step that exercises the image AFTER it has left the
+        # machine that built it, which is the one class of failure everything
+        # above is blind to: an incomplete push, a wrong tag, or permissions
+        # that let the pipeline write while nobody can read.
+        run: |
+          docker rmi $IMAGE:${{ github.sha }}
+          docker run --rm $IMAGE:${{ github.sha }} --text "my internet is down" --mock
